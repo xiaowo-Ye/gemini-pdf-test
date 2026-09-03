@@ -575,70 +575,67 @@ jobs:
                 const clone =
                   source.cloneNode(true);
 
-                clone
-  .querySelectorAll(
-    `
-    script,
-    style,
-    input,
-    textarea,
-    nav,
-    header,
-    footer,
-    [role="toolbar"]
-    `
-  )
-  .forEach(
-    el => el.remove()
-  );
+                                clone
+                  .querySelectorAll(
+                    `
+                    script,
+                    style,
+                    input,
+                    textarea,
+                    nav,
+                    header,
+                    footer,
+                    [role="toolbar"]
+                    `
+                  )
+                  .forEach(
+                    el => el.remove()
+                  );
 
-/*
- * 图片保留修复：
- * Gemini 的聊天图片经常包在 button 里面。
- * 不再直接删除按钮，而是拆掉按钮外壳，
- * 保留里面的图片和正文。
- */
-[
-  ...clone.querySelectorAll(
-    `
-    button,
-    [role="button"],
-    [aria-hidden="true"]
-    `
-  )
-]
-.forEach(el => {
+                /*
+                 * 图片保留修复
+                 */
+                [
+                  ...clone.querySelectorAll(
+                    `
+                    button,
+                    [role="button"],
+                    [aria-hidden="true"]
+                    `
+                  )
+                ]
+                .forEach(el => {
 
-  const hasVisual =
-    !!el.querySelector(
-      "img, picture, canvas, svg"
-    );
+                  const hasVisual =
+                    !!el.querySelector(
+                      "img, picture, canvas, svg"
+                    );
 
-  const text =
-    (
-      el.innerText ||
-      el.textContent ||
-      ""
-    )
-    .replace(/\s+/g, " ")
-    .trim();
+                  const text =
+                    (
+                      el.innerText ||
+                      el.textContent ||
+                      ""
+                    )
+                    .replace(/\s+/g, " ")
+                    .trim();
 
-  if (
-    hasVisual ||
-    text.length >= 4
-  ) {
+                  if (
+                    hasVisual ||
+                    text.length >= 4
+                  ) {
 
-    el.replaceWith(
-      ...el.childNodes
-    );
+                    el.replaceWith(
+                      ...el.childNodes
+                    );
 
-  } else {
+                  } else {
 
-    el.remove();
+                    el.remove();
 
-  }
+                  }
 
-});
+                });
 
                 clone
                   .querySelectorAll("img")
