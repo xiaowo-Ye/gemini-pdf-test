@@ -912,11 +912,7 @@ jobs:
             wc -m
           )
 
-          MIN_CHARS=$(
-            (
-              EXPECTED_CHARS * 65 / 100
-            )
-          )
+          MIN_CHARS=$(( EXPECTED_CHARS * 65 / 100 ))
 
           echo "PDF 页数: $PAGES"
           echo "原始正文文字量: $EXPECTED_CHARS"
