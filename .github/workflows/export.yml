@@ -815,9 +815,42 @@ jobs:
                   line-height: 1.68 !important;
                 }
 
-                #gemini-export-root * {
+                                #gemini-export-root * {
                   max-width: 100%;
                   box-sizing: border-box;
+
+                  /*
+                   * PDF 中禁止 Gemini 的悬浮定位，
+                   * 防止文字气泡压住图片。
+                   */
+                  position: static !important;
+                  transform: none !important;
+                  inset: auto !important;
+                  top: auto !important;
+                  right: auto !important;
+                  bottom: auto !important;
+                  left: auto !important;
+                  z-index: auto !important;
+                  float: none !important;
+                }
+
+                /*
+                 * 只要容器里存在图片，
+                 * 就改成普通纵向文档流。
+                 * 多张图片也会依次向下排列，
+                 * 不再使用 Gemini 原网页的
+                 * 网格 / 轮播 / 悬浮布局。
+                 */
+                #gemini-export-root *:has(img),
+                #gemini-export-root picture {
+                  display: block !important;
+                  position: static !important;
+                  width: 100% !important;
+                  height: auto !important;
+                  max-height: none !important;
+                  overflow: visible !important;
+                  transform: none !important;
+                  inset: auto !important;
                 }
 
                 #gemini-export-root img {
