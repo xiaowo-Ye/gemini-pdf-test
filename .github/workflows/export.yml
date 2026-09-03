@@ -1,4 +1,4 @@
-name: Export Gemini PDF V2
+name: Export Gemini PDF V3
 
 on:
   workflow_dispatch:
@@ -16,7 +16,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install browser and PDF tools
+      - name: Install tools
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y fonts-noto-cjk poppler-utils
@@ -24,9 +24,10 @@ jobs:
           npm install playwright
           npx playwright install --with-deps chromium
 
-      - name: Extract Gemini conversation and create PDF
+      - name: Export Gemini
         env:
           GEMINI_URL: "https://share.gemini.google/9r61Q6OHQeTG"
+
         run: |
           mkdir -p output
 
@@ -35,462 +36,845 @@ jobs:
           const fs = require("fs");
 
           (async () => {
+
             const browser = await chromium.launch({
               headless: true,
-              args: ["--no-sandbox", "--disable-dev-shm-usage"]
+              args: [
+                "--no-sandbox",
+                "--disable-dev-shm-usage"
+              ]
             });
 
             const page = await browser.newPage({
-              viewport: { width: 1440, height: 1200 }
+              viewport: {
+                width: 1440,
+                height: 1200
+              }
             });
 
-            console.log("1. Opening Gemini...");
-            await page.goto(process.env.GEMINI_URL, {
-              waitUntil: "domcontentloaded",
-              timeout: 120000
-            });
+            console.log("① 打开 Gemini 分享页");
+
+            await page.goto(
+              process.env.GEMINI_URL,
+              {
+                waitUntil: "domcontentloaded",
+                timeout: 120000
+              }
+            );
 
             await page.waitForTimeout(5000);
 
-            console.log("Final URL:", page.url());
+            console.log("最终 URL:", page.url());
 
-            console.log("2. Loading complete conversation...");
+            console.log("② 加载完整长对话");
 
             await page.evaluate(async () => {
-              const sleep = ms =>
-                new Promise(resolve => setTimeout(resolve, ms));
 
-              const getScrollables = () =>
-                [...document.querySelectorAll("*")].filter(el => {
+              const sleep = ms =>
+                new Promise(r => setTimeout(r, ms));
+
+              function scrollables() {
+
+                return [
+                  document.scrollingElement,
+                  ...document.querySelectorAll("*")
+                ]
+                .filter(Boolean)
+                .filter(el => {
+
                   try {
-                    const cs = getComputedStyle(el);
+
+                    const style =
+                      getComputedStyle(el);
+
                     return (
-                      el.scrollHeight > el.clientHeight + 100 &&
-                      ["auto", "scroll"].includes(cs.overflowY)
+                      el.scrollHeight >
+                        el.clientHeight + 100 &&
+                      [
+                        "auto",
+                        "scroll"
+                      ].includes(
+                        style.overflowY
+                      )
                     );
+
                   } catch {
+
                     return false;
+
                   }
+
                 });
 
-              for (let round = 0; round < 8; round++) {
-                const scrollables = getScrollables()
-                  .sort((a, b) => b.scrollHeight - a.scrollHeight)
-                  .slice(0, 20);
+              }
 
-                for (const el of scrollables) {
-                  let max = el.scrollHeight;
-                  const step = Math.max(
-                    400,
-                    Math.floor(el.clientHeight * 0.7)
-                  );
+              for (
+                let round = 0;
+                round < 10;
+                round++
+              ) {
 
-                  for (let y = 0; y <= max; y += step) {
+                const list =
+                  scrollables()
+                    .sort(
+                      (a, b) =>
+                        b.scrollHeight -
+                        a.scrollHeight
+                    )
+                    .slice(0, 20);
+
+                for (
+                  const el of list
+                ) {
+
+                  let max =
+                    el.scrollHeight;
+
+                  const step =
+                    Math.max(
+                      500,
+                      Math.floor(
+                        el.clientHeight *
+                        0.7
+                      )
+                    );
+
+                  for (
+                    let y = 0;
+                    y <= max;
+                    y += step
+                  ) {
+
                     el.scrollTop = y;
+
                     await sleep(80);
-                    max = Math.max(max, el.scrollHeight);
+
+                    max =
+                      Math.max(
+                        max,
+                        el.scrollHeight
+                      );
+
                   }
 
-                  el.scrollTop = max;
+                  el.scrollTop =
+                    el.scrollHeight;
+
                   await sleep(150);
+
                 }
 
                 window.scrollTo(
                   0,
-                  document.documentElement.scrollHeight
+                  document.documentElement
+                    .scrollHeight
                 );
 
-                await sleep(500);
+                await sleep(400);
+
               }
 
               window.scrollTo(0, 0);
+
             });
 
             await page.waitForTimeout(2500);
 
-            console.log("3. Waiting for images...");
+            console.log("③ 等待图片加载");
 
             try {
+
               await page.waitForFunction(
                 () =>
-                  [...document.images].every(
-                    img => img.complete
-                  ),
-                { timeout: 30000 }
+                  [...document.images]
+                    .every(
+                      img =>
+                        img.complete
+                    ),
+                {
+                  timeout: 30000
+                }
               );
+
             } catch {}
 
-            console.log("4. Building clean conversation document...");
+            console.log(
+              "④ 自动寻找完整对话正文"
+            );
 
-            const stats = await page.evaluate(() => {
-              const containers = [
-                ...document.querySelectorAll(
-                  "div.conversation-container"
-                )
-              ];
+            const stats =
+              await page.evaluate(() => {
 
-              if (!containers.length) {
-                throw new Error(
-                  "No Gemini conversation containers found"
-                );
-              }
+                const bodyText =
+                  (
+                    document.body
+                      ?.innerText || ""
+                  ).trim();
 
-              const root = document.createElement("main");
-              root.id = "pdf-root";
+                const totalChars =
+                  bodyText.length;
 
-              let userCount = 0;
-              let modelCount = 0;
-              let imageCount = 0;
+                if (
+                  totalChars < 1000
+                ) {
 
-              containers.forEach((container, index) => {
-                const exchange =
-                  document.createElement("section");
-
-                exchange.className = "pdf-exchange";
-
-                // USER
-                const userQuery =
-                  container.querySelector("user-query");
-
-                const queryText =
-                  userQuery?.querySelector(".query-text");
-
-                if (queryText) {
-                  const userBlock =
-                    document.createElement("section");
-
-                  userBlock.className = "pdf-user";
-
-                  const label =
-                    document.createElement("div");
-
-                  label.className = "pdf-role";
-                  label.textContent = `你 · ${index + 1}`;
-
-                  userBlock.appendChild(label);
-                  userBlock.appendChild(
-                    queryText.cloneNode(true)
+                  throw new Error(
+                    "Gemini 页面正文过短"
                   );
 
-                  // User-uploaded images that aren't inside query-text.
-                  if (userQuery) {
-                    userQuery
-                      .querySelectorAll("img")
-                      .forEach(img => {
-                        if (!queryText.contains(img)) {
-                          const cloned =
-                            img.cloneNode(true);
-
-                          cloned.loading = "eager";
-                          userBlock.appendChild(cloned);
-                        }
-                      });
-                  }
-
-                  exchange.appendChild(userBlock);
-                  userCount++;
                 }
 
-                // GEMINI
-                const modelResponse =
-                  container.querySelector(
-                    "model-response"
+                const candidates = [
+                  ...document.querySelectorAll(
+                    "main, article, section, div, " +
+                    "mat-sidenav-content, " +
+                    "bard-sidenav-container, " +
+                    "chat-window, " +
+                    "[role='main']"
+                  )
+                ];
+
+                const viable =
+                  candidates
+                    .map(el => ({
+                      el,
+                      chars:
+                        (
+                          el.innerText ||
+                          ""
+                        ).trim().length,
+                      depth:
+                        (() => {
+                          let d = 0;
+                          let p = el;
+
+                          while (
+                            p &&
+                            p !==
+                              document.body
+                          ) {
+                            d++;
+                            p =
+                              p.parentElement;
+                          }
+
+                          return d;
+                        })()
+                    }))
+                    .filter(x =>
+                      x.chars >=
+                      totalChars * 0.65
+                    );
+
+                if (!viable.length) {
+
+                  throw new Error(
+                    "没有找到完整正文容器"
                   );
 
-                if (modelResponse) {
-                  const regular =
-                    modelResponse.querySelector(
-                      ".model-response-text .markdown"
+                }
+
+                /*
+                  优先选择：
+                  1. 包含至少 65% 页面文字
+                  2. 层级尽量深
+                  这样可以避开整个 app 外壳。
+                */
+
+                viable.sort(
+                  (a, b) => {
+
+                    if (
+                      Math.abs(
+                        a.chars -
+                        b.chars
+                      ) <
+                      totalChars * 0.05
+                    ) {
+
+                      return (
+                        b.depth -
+                        a.depth
+                      );
+
+                    }
+
+                    return (
+                      b.chars -
+                      a.chars
                     );
 
-                  const extended =
-                    modelResponse.querySelector(
-                      "#extended-response-markdown-content"
-                    );
-
-                  const content =
-                    extended || regular;
-
-                  if (content) {
-                    const modelBlock =
-                      document.createElement("section");
-
-                    modelBlock.className = "pdf-model";
-
-                    const label =
-                      document.createElement("div");
-
-                    label.className = "pdf-role";
-                    label.textContent = "Gemini";
-
-                    modelBlock.appendChild(label);
-                    modelBlock.appendChild(
-                      content.cloneNode(true)
-                    );
-
-                    // Append images that Gemini puts outside the
-                    // markdown element.
-                    modelResponse
-                      .querySelectorAll("img")
-                      .forEach(img => {
-                        if (!content.contains(img)) {
-                          const cloned =
-                            img.cloneNode(true);
-
-                          cloned.loading = "eager";
-                          modelBlock.appendChild(cloned);
-                        }
-                      });
-
-                    exchange.appendChild(modelBlock);
-                    modelCount++;
                   }
-                }
-
-                if (exchange.children.length) {
-                  root.appendChild(exchange);
-                }
-              });
-
-              imageCount =
-                root.querySelectorAll("img").length;
-
-              const textChars =
-                (root.innerText || "").length;
-
-              // Hide the original Gemini interface, but keep the
-              // same document so its fonts/CSS/blob images remain alive.
-              [...document.body.children].forEach(el => {
-                el.style.setProperty(
-                  "display",
-                  "none",
-                  "important"
                 );
+
+                const source =
+                  viable[0].el;
+
+                const sourceChars =
+                  (
+                    source.innerText ||
+                    ""
+                  ).trim().length;
+
+                console.log(
+                  "正文候选字符数:",
+                  sourceChars
+                );
+
+                /*
+                  先记录真实图片 URL。
+                */
+
+                source
+                  .querySelectorAll("img")
+                  .forEach(
+                    (img, index) => {
+
+                      img.setAttribute(
+                        "data-export-src",
+                        img.currentSrc ||
+                        img.src ||
+                        ""
+                      );
+
+                    }
+                  );
+
+                const clone =
+                  source.cloneNode(true);
+
+                /*
+                  去掉网页控制元素。
+                */
+
+                clone
+                  .querySelectorAll(
+                    `
+                    script,
+                    style,
+                    button,
+                    input,
+                    textarea,
+                    nav,
+                    header,
+                    footer,
+                    [role="button"],
+                    [role="toolbar"],
+                    [aria-hidden="true"]
+                    `
+                  )
+                  .forEach(
+                    el => el.remove()
+                  );
+
+                /*
+                  恢复图片真实地址。
+                */
+
+                clone
+                  .querySelectorAll(
+                    "img"
+                  )
+                  .forEach(img => {
+
+                    const src =
+                      img.getAttribute(
+                        "data-export-src"
+                      );
+
+                    if (src) {
+                      img.src = src;
+                    }
+
+                    img.removeAttribute(
+                      "loading"
+                    );
+
+                  });
+
+                /*
+                  去掉 Gemini 页面原本用于
+                  固定高度 / 虚拟滚动的布局限制。
+                */
+
+                [
+                  clone,
+                  ...clone.querySelectorAll(
+                    "*"
+                  )
+                ]
+                .forEach(el => {
+
+                  try {
+
+                    el.style
+                      .setProperty(
+                        "max-height",
+                        "none",
+                        "important"
+                      );
+
+                    el.style
+                      .setProperty(
+                        "overflow",
+                        "visible",
+                        "important"
+                      );
+
+                    el.style
+                      .setProperty(
+                        "overflow-y",
+                        "visible",
+                        "important"
+                      );
+
+                    el.style
+                      .setProperty(
+                        "contain",
+                        "none",
+                        "important"
+                      );
+
+                    el.style
+                      .setProperty(
+                        "content-visibility",
+                        "visible",
+                        "important"
+                      );
+
+                    el.style
+                      .setProperty(
+                        "visibility",
+                        "visible",
+                        "important"
+                      );
+
+                    el.style
+                      .setProperty(
+                        "opacity",
+                        "1",
+                        "important"
+                      );
+
+                  } catch {}
+
+                });
+
+                clone.id =
+                  "gemini-export-root";
+
+                /*
+                  原页面全部清空，
+                  只留下我们提取的正文。
+                */
+
+                document.body
+                  .replaceChildren(clone);
+
+                const finalChars =
+                  (
+                    clone.innerText ||
+                    ""
+                  ).trim().length;
+
+                const images =
+                  clone
+                    .querySelectorAll(
+                      "img"
+                    ).length;
+
+                return {
+
+                  originalChars:
+                    totalChars,
+
+                  exportedChars:
+                    finalChars,
+
+                  sourceChars,
+
+                  images
+
+                };
+
               });
 
-              document.body.appendChild(root);
+            console.log(
+              "提取统计:",
+              stats
+            );
 
-              return {
-                conversationContainers: containers.length,
-                userCount,
-                modelCount,
-                imageCount,
-                textChars
-              };
-            });
+            /*
+              要求至少保留原页面
+              70% 的文字。
+            */
 
-            console.log("Extraction stats:", stats);
+            if (
+              stats.exportedChars <
+              stats.originalChars * 0.70
+            ) {
 
-            if (stats.userCount === 0) {
               throw new Error(
-                "No user messages were extracted"
+                "正文提取比例不足"
               );
+
             }
 
-            if (stats.modelCount === 0) {
+            if (
+              stats.exportedChars <
+              10000
+            ) {
+
               throw new Error(
-                "No Gemini responses were extracted"
+                "提取文字不足 10000 字符"
               );
+
             }
 
-            if (stats.textChars < 10000) {
-              throw new Error(
-                `Extracted text too short: ${stats.textChars}`
-              );
-            }
+            console.log(
+              "⑤ 设置 PDF 排版"
+            );
 
             await page.addStyleTag({
               content: `
-                @page {
-                  size: A4;
-                  margin: 15mm 14mm 18mm;
-                }
 
-                html,
-                body {
-                  background: #fff !important;
-                  color: #171717 !important;
-                  height: auto !important;
-                  overflow: visible !important;
-                }
+              @page {
 
-                #pdf-root {
-                  display: block !important;
-                  width: 100% !important;
-                  max-width: 100% !important;
-                  overflow: visible !important;
-                  font-family:
-                    "Noto Sans CJK SC",
-                    "Noto Sans SC",
-                    "Microsoft YaHei",
-                    sans-serif;
-                  font-size: 11pt;
-                  line-height: 1.68;
-                }
+                size: A4;
 
-                .pdf-exchange {
-                  display: block;
-                  margin: 0 0 12mm;
-                  padding: 0 0 7mm;
-                  border-bottom: 1px solid #e6e6e6;
-                }
+                margin:
+                  15mm
+                  14mm
+                  18mm;
 
-                .pdf-role {
-                  font-size: 9pt;
-                  font-weight: 700;
-                  color: #666;
-                  margin-bottom: 3mm;
-                }
+              }
 
-                .pdf-user {
-                  display: block;
-                  margin-bottom: 7mm;
-                  padding: 4mm 5mm;
-                  border-radius: 4mm;
-                  background: #f3f4f6;
-                }
+              html,
+              body {
 
-                .pdf-model {
-                  display: block;
-                }
+                width: auto !important;
+                height: auto !important;
 
-                #pdf-root h1,
-                #pdf-root h2,
-                #pdf-root h3,
-                #pdf-root h4 {
-                  line-height: 1.35;
-                  break-after: avoid;
-                }
+                max-height: none !important;
 
-                #pdf-root p {
-                  margin-top: 0;
-                  margin-bottom: 3.5mm;
-                }
+                overflow: visible !important;
 
-                #pdf-root ul,
-                #pdf-root ol {
-                  padding-left: 7mm;
-                }
+                background:
+                  #ffffff !important;
 
-                #pdf-root img {
-                  display: block !important;
-                  max-width: 100% !important;
-                  height: auto !important;
-                  max-height: 230mm !important;
-                  object-fit: contain !important;
-                  margin: 5mm auto !important;
-                  break-inside: avoid !important;
-                  page-break-inside: avoid !important;
-                }
+                color:
+                  #181818 !important;
 
-                #pdf-root table {
-                  width: 100% !important;
-                  max-width: 100% !important;
-                  border-collapse: collapse !important;
-                  table-layout: fixed !important;
-                  font-size: 9pt;
-                }
+              }
 
-                #pdf-root th,
-                #pdf-root td {
-                  overflow-wrap: anywhere !important;
-                  word-break: break-word !important;
-                }
+              body {
 
-                #pdf-root pre {
-                  white-space: pre-wrap !important;
-                  overflow-wrap: anywhere !important;
-                  word-break: break-word !important;
-                  max-width: 100% !important;
-                }
+                margin: 0 !important;
 
-                #pdf-root code {
-                  white-space: pre-wrap !important;
-                  overflow-wrap: anywhere !important;
-                }
+              }
 
-                #pdf-root button,
-                #pdf-root script,
-                #pdf-root style {
-                  display: none !important;
-                }
+              #gemini-export-root {
+
+                display: block !important;
+
+                width: 100% !important;
+
+                max-width: 100% !important;
+
+                height: auto !important;
+
+                max-height: none !important;
+
+                overflow: visible !important;
+
+                position: static !important;
+
+                transform:
+                  none !important;
+
+                font-family:
+                  "Noto Sans CJK SC",
+                  "Noto Sans SC",
+                  "Microsoft YaHei",
+                  sans-serif !important;
+
+                font-size:
+                  10.8pt !important;
+
+                line-height:
+                  1.68 !important;
+
+              }
+
+              #gemini-export-root * {
+
+                max-width:
+                  100%;
+
+                box-sizing:
+                  border-box;
+
+              }
+
+              #gemini-export-root
+              img {
+
+                display:
+                  block !important;
+
+                max-width:
+                  100% !important;
+
+                width:
+                  auto !important;
+
+                height:
+                  auto !important;
+
+                max-height:
+                  230mm !important;
+
+                object-fit:
+                  contain !important;
+
+                margin:
+                  5mm auto !important;
+
+                break-inside:
+                  avoid !important;
+
+              }
+
+              #gemini-export-root
+              p {
+
+                margin-top: 0;
+
+                margin-bottom:
+                  3.5mm;
+
+              }
+
+              #gemini-export-root
+              h1,
+              #gemini-export-root
+              h2,
+              #gemini-export-root
+              h3,
+              #gemini-export-root
+              h4 {
+
+                line-height:
+                  1.35;
+
+                break-after:
+                  avoid;
+
+              }
+
+              #gemini-export-root
+              pre {
+
+                white-space:
+                  pre-wrap !important;
+
+                overflow-wrap:
+                  anywhere !important;
+
+                word-break:
+                  break-word !important;
+
+                max-width:
+                  100% !important;
+
+              }
+
+              #gemini-export-root
+              code {
+
+                white-space:
+                  pre-wrap !important;
+
+                overflow-wrap:
+                  anywhere !important;
+
+              }
+
+              #gemini-export-root
+              table {
+
+                width:
+                  100% !important;
+
+                max-width:
+                  100% !important;
+
+                table-layout:
+                  fixed !important;
+
+                border-collapse:
+                  collapse !important;
+
+              }
+
+              #gemini-export-root
+              th,
+              #gemini-export-root
+              td {
+
+                word-break:
+                  break-word !important;
+
+                overflow-wrap:
+                  anywhere !important;
+
+              }
+
               `
             });
 
             try {
-              await page.evaluate(async () => {
-                if (document.fonts?.ready) {
-                  await document.fonts.ready;
+
+              await page.evaluate(
+                async () => {
+
+                  if (
+                    document.fonts
+                      ?.ready
+                  ) {
+
+                    await document
+                      .fonts.ready;
+
+                  }
+
                 }
-              });
+              );
+
             } catch {}
 
-            await page.waitForTimeout(1500);
+            await page.waitForTimeout(
+              1500
+            );
+
+            console.log(
+              "⑥ 生成 PDF"
+            );
 
             await page.pdf({
-              path: "output/Gemini-conversation.pdf",
-              format: "A4",
-              printBackground: true,
-              preferCSSPageSize: true,
-              displayHeaderFooter: false
+
+              path:
+                "output/Gemini-conversation.pdf",
+
+              format:
+                "A4",
+
+              printBackground:
+                true,
+
+              preferCSSPageSize:
+                true,
+
+              displayHeaderFooter:
+                false
+
             });
 
             fs.writeFileSync(
+
               "output/extraction-stats.json",
-              JSON.stringify(stats, null, 2)
+
+              JSON.stringify(
+                stats,
+                null,
+                2
+              )
+
             );
 
             await browser.close();
 
-            console.log("PDF rendering completed.");
-          })().catch(err => {
+            console.log(
+              "PDF 已生成"
+            );
+
+          })()
+          .catch(err => {
+
             console.error(err);
+
             process.exit(1);
+
           });
+
           NODE
 
-      - name: Validate generated PDF
+      - name: Validate PDF
         run: |
-          echo "=== PDF INFO ==="
-          pdfinfo output/Gemini-conversation.pdf
+
+          echo "===== PDF INFO ====="
+
+          pdfinfo \
+            output/Gemini-conversation.pdf
 
           PAGES=$(
-            pdfinfo output/Gemini-conversation.pdf |
+            pdfinfo \
+              output/Gemini-conversation.pdf |
             awk '/Pages:/ {print $2}'
           )
 
-          TEXT_CHARS=$(
-            pdftotext output/Gemini-conversation.pdf - |
+          CHARS=$(
+            pdftotext \
+              output/Gemini-conversation.pdf \
+              - |
             wc -m
           )
 
-          echo "Validated PDF pages: $PAGES"
-          echo "Validated PDF text characters: $TEXT_CHARS"
+          echo "PDF 页数: $PAGES"
+          echo "PDF 文字数: $CHARS"
 
-          if [ "$PAGES" -lt 2 ]; then
-            echo "ERROR: PDF only has $PAGES page(s)"
+          if [ "$PAGES" -lt 3 ]; then
+
+            echo \
+              "PDF 页数异常"
+
             exit 1
+
           fi
 
-          if [ "$TEXT_CHARS" -lt 10000 ]; then
-            echo "ERROR: PDF text is incomplete"
+          if [ "$CHARS" -lt 10000 ]; then
+
+            echo \
+              "PDF 文字量不足"
+
             exit 1
+
           fi
 
-          echo "PDF validation PASSED."
+          echo \
+            "PDF 严格验收通过"
 
-      - name: Upload validated PDF
+      - name: Upload PDF
         uses: actions/upload-artifact@v4
+
         with:
-          name: Gemini-PDF-Validated
+
+          name:
+            Gemini-PDF-V3
+
           path: |
             output/Gemini-conversation.pdf
             output/extraction-stats.json
 
-      - name: Save validated PDF into repository
+      - name: Save PDF
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email \
+
+          git config \
+            user.name \
+            "github-actions[bot]"
+
+          git config \
+            user.email \
             "41898282+github-actions[bot]@users.noreply.github.com"
 
           git add \
@@ -498,6 +882,8 @@ jobs:
             output/extraction-stats.json
 
           git commit \
-            -m "Generate validated Gemini PDF" || true
+            -m \
+            "Generate Gemini PDF V3" \
+            || true
 
           git push
