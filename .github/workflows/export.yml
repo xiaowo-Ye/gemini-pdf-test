@@ -605,6 +605,16 @@ jobs:
                   )
                 ]
                 .forEach(el => {
+                 if (
+                    el.getAttribute(
+                      "aria-hidden"
+                    ) === "true"
+                  ) {
+
+                    el.remove();
+                    return;
+
+                  }
 
                   const hasVisual =
                     !!el.querySelector(
@@ -691,17 +701,7 @@ jobs:
                       "important"
                     );
 
-                    el.style.setProperty(
-                      "visibility",
-                      "visible",
-                      "important"
-                    );
-
-                    el.style.setProperty(
-                      "opacity",
-                      "1",
-                      "important"
-                    );
+                  
                   } catch {}
                 });
 
@@ -815,7 +815,16 @@ jobs:
                   line-height: 1.68 !important;
                 }
 
-                                #gemini-export-root * {
+                                               /*
+                 * 隐藏 Gemini 的辅助/重复文字，
+                 * 防止用户消息在 PDF 中叠字。
+                 */
+                #gemini-export-root [aria-hidden="true"],
+                #gemini-export-root [class*="visually-hidden"],
+                #gemini-export-root [class*="sr-only"] {
+                  display: none !important;
+                }
+                #gemini-export-root * {
                   max-width: 100%;
                   box-sizing: border-box;
 
