@@ -1,0 +1,270 @@
+name: Export Gemini PDF
+
+on:
+  push:
+    paths:
+      - ".github/workflows/export.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Chromium
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y fonts-noto-cjk
+          npm init -y
+          npm install playwright
+          npx playwright install --with-deps chromium
+
+      - name: Export Gemini conversation
+        env:
+          GEMINI_URL: "https://share.gemini.google/9r61Q6OHQeTG"
+        run: |
+          mkdir -p output
+
+          node <<'NODE'
+          const { chromium } = require("playwright");
+
+          (async () => {
+            const browser = await chromium.launch({
+              headless: true,
+              args: ["--no-sandbox", "--disable-dev-shm-usage"]
+            });
+
+            const page = await browser.newPage({
+              viewport: { width: 1440, height: 1200 }
+            });
+
+            console.log("Opening Gemini...");
+            await page.goto(process.env.GEMINI_URL, {
+              waitUntil: "domcontentloaded",
+              timeout: 120000
+            });
+
+            console.log("Final URL:", page.url());
+            await page.waitForTimeout(5000);
+
+            // 点击可能存在的“显示更多”
+            for (let pass = 0; pass < 5; pass++) {
+              await page.evaluate(() => {
+                const words = [
+                  "显示更多", "查看更多", "展开",
+                  "Show more", "Read more", "Expand"
+                ];
+
+                document
+                  .querySelectorAll('button,[role="button"]')
+                  .forEach(el => {
+                    const text =
+                      (el.innerText || el.textContent || "").trim();
+
+                    if (words.some(w =>
+                      text.toLowerCase().includes(w.toLowerCase())
+                    )) {
+                      try { el.click(); } catch {}
+                    }
+                  });
+              });
+
+              await page.waitForTimeout(500);
+            }
+
+            console.log("Loading long conversation...");
+
+            // 将页面和内部滚动区域全部从头滚到底
+            await page.evaluate(async () => {
+              const sleep = ms =>
+                new Promise(resolve => setTimeout(resolve, ms));
+
+              const getScrollables = () =>
+                [...document.querySelectorAll("*")].filter(el => {
+                  try {
+                    const s = getComputedStyle(el);
+                    return (
+                      el.scrollHeight > el.clientHeight + 200 &&
+                      ["auto", "scroll"].includes(s.overflowY)
+                    );
+                  } catch {
+                    return false;
+                  }
+                });
+
+              let root =
+                document.scrollingElement ||
+                document.documentElement;
+
+              let lastHeight = 0;
+
+              for (let round = 0; round < 6; round++) {
+                let height = root.scrollHeight;
+
+                for (let y = 0; y < height; y += 650) {
+                  window.scrollTo(0, y);
+                  await sleep(120);
+                  height = Math.max(height, root.scrollHeight);
+                }
+
+                for (const el of getScrollables()
+                  .sort((a, b) => b.scrollHeight - a.scrollHeight)
+                  .slice(0, 15)) {
+
+                  let max = el.scrollHeight;
+                  let step = Math.max(
+                    400,
+                    Math.floor(el.clientHeight * 0.7)
+                  );
+
+                  for (let y = 0; y < max; y += step) {
+                    el.scrollTop = y;
+                    await sleep(100);
+                    max = Math.max(max, el.scrollHeight);
+                  }
+
+                  el.scrollTop = max;
+                  await sleep(200);
+                }
+
+                if (root.scrollHeight === lastHeight) break;
+                lastHeight = root.scrollHeight;
+              }
+
+              window.scrollTo(0, 0);
+            });
+
+            await page.waitForTimeout(3000);
+
+            // 等图片加载
+            try {
+              await page.waitForFunction(
+                () =>
+                  [...document.images].every(
+                    img => img.complete
+                  ),
+                { timeout: 30000 }
+              );
+            } catch {}
+
+            const info = await page.evaluate(() => ({
+              chars: document.body.innerText.length,
+              images: document.images.length,
+              height: document.body.scrollHeight
+            }));
+
+            console.log("Page stats:", info);
+
+            if (info.chars < 500) {
+              throw new Error(
+                "Gemini page content is unexpectedly short"
+              );
+            }
+
+            // 把内部滚动容器展开，避免 PDF 只打印可见部分
+            await page.evaluate(() => {
+              [...document.querySelectorAll("*")].forEach(el => {
+                try {
+                  const s = getComputedStyle(el);
+
+                  if (
+                    el.scrollHeight > el.clientHeight + 150 &&
+                    ["auto", "scroll", "hidden"].includes(s.overflowY)
+                  ) {
+                    el.style.setProperty(
+                      "height",
+                      el.scrollHeight + "px",
+                      "important"
+                    );
+                    el.style.setProperty(
+                      "max-height",
+                      "none",
+                      "important"
+                    );
+                    el.style.setProperty(
+                      "overflow",
+                      "visible",
+                      "important"
+                    );
+                  }
+                } catch {}
+              });
+
+              document.documentElement.style.overflow =
+                "visible";
+              document.body.style.overflow = "visible";
+            });
+
+            await page.addStyleTag({
+              content: `
+                @page {
+                  size: A4;
+                  margin: 14mm 12mm 16mm;
+                }
+
+                html, body {
+                  background: white !important;
+                  height: auto !important;
+                  overflow: visible !important;
+                }
+
+                header,
+                nav,
+                aside,
+                [role="navigation"] {
+                  display: none !important;
+                }
+
+                img, picture, video, canvas, svg {
+                  max-width: 100% !important;
+                  height: auto !important;
+                  object-fit: contain !important;
+                  break-inside: avoid !important;
+                }
+
+                pre, code {
+                  white-space: pre-wrap !important;
+                  overflow-wrap: anywhere !important;
+                }
+
+                table {
+                  width: 100% !important;
+                  table-layout: fixed !important;
+                  overflow-wrap: anywhere !important;
+                }
+              `
+            });
+
+            await page.emulateMedia({ media: "screen" });
+
+            await page.pdf({
+              path: "output/Gemini-conversation.pdf",
+              format: "A4",
+              printBackground: true,
+              preferCSSPageSize: true
+            });
+
+            await browser.close();
+
+            console.log("PDF generated successfully.");
+          })();
+          NODE
+
+      - name: Upload PDF artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Gemini-PDF
+          path: output/Gemini-conversation.pdf
+
+      - name: Save PDF into repository
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add output/Gemini-conversation.pdf
+          git commit -m "Generate Gemini PDF" || true
+          git push
