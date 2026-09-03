@@ -576,24 +576,69 @@ jobs:
                   source.cloneNode(true);
 
                 clone
-                  .querySelectorAll(
-                    `
-                    script,
-                    style,
-                    button,
-                    input,
-                    textarea,
-                    nav,
-                    header,
-                    footer,
-                    [role="button"],
-                    [role="toolbar"],
-                    [aria-hidden="true"]
-                    `
-                  )
-                  .forEach(
-                    el => el.remove()
-                  );
+  .querySelectorAll(
+    `
+    script,
+    style,
+    input,
+    textarea,
+    nav,
+    header,
+    footer,
+    [role="toolbar"]
+    `
+  )
+  .forEach(
+    el => el.remove()
+  );
+
+/*
+ * 图片保留修复：
+ * Gemini 的聊天图片经常包在 button 里面。
+ * 不再直接删除按钮，而是拆掉按钮外壳，
+ * 保留里面的图片和正文。
+ */
+[
+  ...clone.querySelectorAll(
+    `
+    button,
+    [role="button"],
+    [aria-hidden="true"]
+    `
+  )
+]
+.forEach(el => {
+
+  const hasVisual =
+    !!el.querySelector(
+      "img, picture, canvas, svg"
+    );
+
+  const text =
+    (
+      el.innerText ||
+      el.textContent ||
+      ""
+    )
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (
+    hasVisual ||
+    text.length >= 4
+  ) {
+
+    el.replaceWith(
+      ...el.childNodes
+    );
+
+  } else {
+
+    el.remove();
+
+  }
+
+});
 
                 clone
                   .querySelectorAll("img")
